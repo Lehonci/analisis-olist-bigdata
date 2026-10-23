@@ -374,24 +374,6 @@ PostgreSQL harus tetap aktif selama proses yang membutuhkan koneksi database ber
 8. Port sudah digunakan
    Periksa apakah proses Kafka, PostgreSQL, atau Streamlit sebelumnya masih berjalan.
 
-## K. CHECKLIST AKHIR
-
-[ ] Git, VS Code, dan Python terpasang.
-[ ] Virtual environment berhasil dibuat.
-[ ] requirements.txt berhasil diinstal.
-[ ] Java JDK terdeteksi.
-[ ] Kafka berhasil dijalankan.
-[ ] PostgreSQL berhasil dijalankan.
-[ ] Database olist_db tersedia.
-[ ] Konfigurasi koneksi sesuai.
-[ ] Dataset CSV tersedia.
-[ ] Consumer dan producer berhasil memproses data.
-[ ] Tabel staging tersedia dan berisi data.
-[ ] eda_spark.py berhasil dijalankan.
-[ ] Tabel hasil clustering tersedia.
-[ ] dashboard.py berhasil dijalankan.
-[ ] Dashboard tampil tanpa error.
-
 SELESAI
 
 Dashboard dapat diakses melalui browser lokal setelah semua dependensi, layanan, dan tabel database yang diperlukan tersedia.
