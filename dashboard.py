@@ -3,442 +3,665 @@ import pandas as pd
 import psycopg2
 import plotly.express as px
 import plotly.graph_objects as go
-import numpy as np
+from config import DB_CONN_PARAMS, ANALYTICS_TABLES
 
 # ─────────────────────────────────────────────────────────
-# Page Configuration
+# Konfigurasi Halaman Streamlit
 # ─────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Olist E-Commerce Big Data & Clustering Dashboard",
+    page_title="Olist E-Commerce Big Data & Regional Clustering Dashboard",
     page_icon="🛒",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom Styling
-st.markdown("""
+st.markdown(
+    """
     <style>
     .main-title {
-        font-size: 2.2rem;
+        font-size: 2.1rem;
         font-weight: 700;
         color: #1E3A8A;
-        margin-bottom: 0px;
+        margin-bottom: 2px;
     }
     .sub-title {
-        font-size: 1rem;
-        color: #64748B;
-        margin-bottom: 20px;
-    }
-    .kpi-card {
-        background-color: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
-    }
-    .kpi-value {
-        font-size: 1.8rem;
-        font-weight: bold;
-        color: #0F172A;
-    }
-    .kpi-label {
-        font-size: 0.85rem;
-        color: #64748B;
-        text-transform: uppercase;
+        font-size: 0.98rem;
+        color: #475569;
+        margin-bottom: 18px;
     }
     </style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ─────────────────────────────────────────────────────────
-# Database Connection & Helper Loaders
+# Pembaca Tabel Hasil Olahan Apache Spark (Analytics Mart)
+# Tanpa Query Pengolahan SQL Biasa & Tanpa Data Hardcode
 # ─────────────────────────────────────────────────────────
-@st.cache_resource
-def get_db_connection():
+@st.cache_data(ttl=300)
+def load_analytics_table(table_key: str) -> pd.DataFrame:
+    """Membaca tabel hasil olahan Apache Spark dari layer Analytics Mart di PostgreSQL."""
+    table_name = ANALYTICS_TABLES[table_key]
+    conn = None
     try:
-        conn = psycopg2.connect(
-            dbname="olist_db", user="postgres", password="postgres", host="localhost"
-        )
-        return conn
-    except Exception as e:
-        return None
-
-def load_data(query, fallback_fn=None):
-    conn = get_db_connection()
-    if conn is not None:
-        try:
-            df = pd.read_sql(query, conn)
-            return df
-        except Exception:
-            pass
-    if fallback_fn is not None:
-        return fallback_fn()
-    return pd.DataFrame()
-
-# Fallback loaders using CSV directly if PostgreSQL is not active
-def fallback_overview():
-    try:
-        df_cust = pd.read_csv("data/olist_customers_dataset.csv")
-        df_orders = pd.read_csv("data/olist_orders_dataset.csv")
-        df_pay = pd.read_csv("data/olist_order_payments_dataset.csv")
-        df_rev = pd.read_csv("data/olist_order_reviews_dataset.csv")
-        
-        return {
-            "total_customers": len(df_cust["customer_unique_id"].unique()),
-            "total_orders": len(df_orders),
-            "total_revenue": df_pay["payment_value"].sum(),
-            "avg_review": df_rev["review_score"].mean(),
-            "total_states": df_cust["customer_state"].nunique()
-        }
+        conn = psycopg2.connect(**DB_CONN_PARAMS)
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM {table_name}")
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return pd.DataFrame(rows, columns=columns)
     except Exception:
-        return {
-            "total_customers": 96096,
-            "total_orders": 99441,
-            "total_revenue": 16008872.12,
-            "avg_review": 4.08,
-            "total_states": 27
-        }
+        return pd.DataFrame()
+    finally:
+        if conn is not None:
+            conn.close()
 
-def fallback_clustering_metrics():
-    # Simulasi hasil jika DB belum dijalankan
-    return pd.DataFrame({
-        "k": [2, 3, 4, 5, 6, 7, 8],
-        "wssse_cost": [162.4, 115.2, 78.6, 56.3, 42.1, 33.5, 27.2],
-        "silhouette_score": [0.582, 0.634, 0.612, 0.541, 0.489, 0.432, 0.395]
-    })
-
-def fallback_state_clusters():
-    # Brazilian states data sample fallback
-    states_data = [
-        {"customer_state": "SP", "cluster": 0, "total_customers": 41746, "total_orders": 40501, "total_revenue": 5998240.0, "avg_order_value": 148.1, "total_items": 47000, "avg_freight_value": 15.1, "avg_review_score": 4.15},
-        {"customer_state": "RJ", "cluster": 1, "total_customers": 12852, "total_orders": 12350, "total_revenue": 2144378.0, "avg_order_value": 173.6, "total_items": 14500, "avg_freight_value": 20.9, "avg_review_score": 3.87},
-        {"customer_state": "MG", "cluster": 1, "total_customers": 11635, "total_orders": 11354, "total_revenue": 1872202.0, "avg_order_value": 164.9, "total_items": 13100, "avg_freight_value": 20.6, "avg_review_score": 4.10},
-        {"customer_state": "RS", "cluster": 1, "total_customers": 5466, "total_orders": 5342, "total_revenue": 890897.0, "avg_order_value": 166.7, "total_items": 6200, "avg_freight_value": 21.7, "avg_review_score": 4.12},
-        {"customer_state": "PR", "cluster": 1, "total_customers": 5045, "total_orders": 4923, "total_revenue": 811156.0, "avg_order_value": 164.7, "total_items": 5700, "avg_freight_value": 20.5, "avg_review_score": 4.14},
-        {"customer_state": "BA", "cluster": 2, "total_customers": 3380, "total_orders": 3277, "total_revenue": 616645.0, "avg_order_value": 188.1, "total_items": 3900, "avg_freight_value": 26.4, "avg_review_score": 3.86},
-        {"customer_state": "SC", "cluster": 1, "total_customers": 3637, "total_orders": 3546, "total_revenue": 622463.0, "avg_order_value": 175.5, "total_items": 4100, "avg_freight_value": 21.4, "avg_review_score": 4.07},
-        {"customer_state": "GO", "cluster": 2, "total_customers": 2020, "total_orders": 1957, "total_revenue": 355049.0, "avg_order_value": 181.4, "total_items": 2300, "avg_freight_value": 22.8, "avg_review_score": 4.03},
-        {"customer_state": "PE", "cluster": 2, "total_customers": 1652, "total_orders": 1593, "total_revenue": 324850.0, "avg_order_value": 203.9, "total_items": 1900, "avg_freight_value": 32.9, "avg_review_score": 4.01},
-        {"customer_state": "CE", "cluster": 2, "total_customers": 1336, "total_orders": 1279, "total_revenue": 279464.0, "avg_order_value": 218.4, "total_items": 1500, "avg_freight_value": 32.7, "avg_review_score": 3.84},
-        {"customer_state": "PA", "cluster": 2, "total_customers": 975, "total_orders": 949, "total_revenue": 218295.0, "avg_order_value": 230.0, "total_items": 1100, "avg_freight_value": 35.8, "avg_review_score": 3.83},
-        {"customer_state": "MT", "cluster": 2, "total_customers": 907, "total_orders": 886, "total_revenue": 187071.0, "avg_order_value": 211.1, "total_items": 1050, "avg_freight_value": 28.1, "avg_review_score": 4.10},
-        {"customer_state": "MA", "cluster": 2, "total_customers": 747, "total_orders": 717, "total_revenue": 152523.0, "avg_order_value": 212.7, "total_items": 850, "avg_freight_value": 38.3, "avg_review_score": 3.76},
-        {"customer_state": "MS", "cluster": 2, "total_customers": 715, "total_orders": 701, "total_revenue": 137534.0, "avg_order_value": 196.2, "total_items": 800, "avg_freight_value": 23.4, "avg_review_score": 4.12},
-        {"customer_state": "PB", "cluster": 2, "total_customers": 536, "total_orders": 517, "total_revenue": 141545.0, "avg_order_value": 273.7, "total_items": 600, "avg_freight_value": 42.7, "avg_review_score": 4.02},
-        {"customer_state": "PI", "cluster": 2, "total_customers": 495, "total_orders": 476, "total_revenue": 108523.0, "avg_order_value": 227.9, "total_items": 550, "avg_freight_value": 39.1, "avg_review_score": 3.92},
-        {"customer_state": "RN", "cluster": 2, "total_customers": 485, "total_orders": 474, "total_revenue": 102718.0, "avg_order_value": 216.7, "total_items": 530, "avg_freight_value": 35.6, "avg_review_score": 4.09},
-        {"customer_state": "AL", "cluster": 2, "total_customers": 413, "total_orders": 397, "total_revenue": 96948.0, "avg_order_value": 244.2, "total_items": 450, "avg_freight_value": 35.8, "avg_review_score": 3.75},
-        {"customer_state": "SE", "cluster": 2, "total_customers": 350, "total_orders": 335, "total_revenue": 75246.0, "avg_order_value": 224.6, "total_items": 380, "avg_freight_value": 36.6, "avg_review_score": 3.81},
-        {"customer_state": "TO", "cluster": 2, "total_customers": 280, "total_orders": 274, "total_revenue": 61485.0, "avg_order_value": 224.4, "total_items": 310, "avg_freight_value": 37.2, "avg_review_score": 4.10},
-        {"customer_state": "RO", "cluster": 2, "total_customers": 253, "total_orders": 243, "total_revenue": 60866.0, "avg_order_value": 250.4, "total_items": 280, "avg_freight_value": 41.1, "avg_review_score": 4.05},
-        {"customer_state": "AM", "cluster": 2, "total_customers": 148, "total_orders": 145, "total_revenue": 34956.0, "avg_order_value": 241.0, "total_items": 165, "avg_freight_value": 43.8, "avg_review_score": 4.14},
-        {"customer_state": "AC", "cluster": 2, "total_customers": 81, "total_orders": 80, "total_revenue": 19685.0, "avg_order_value": 246.0, "total_items": 90, "avg_freight_value": 40.1, "avg_review_score": 4.05},
-        {"customer_state": "AP", "cluster": 2, "total_customers": 68, "total_orders": 67, "total_revenue": 16263.0, "avg_order_value": 242.7, "total_items": 75, "avg_freight_value": 42.9, "avg_review_score": 4.19},
-        {"customer_state": "RR", "cluster": 2, "total_customers": 46, "total_orders": 41, "total_revenue": 10065.0, "avg_order_value": 245.5, "total_items": 50, "avg_freight_value": 42.9, "avg_review_score": 3.61}
-    ]
-    return pd.DataFrame(states_data)
-
-def fallback_top_products():
-    return pd.DataFrame({
-        "cluster": [0, 0, 0, 1, 1, 1, 2, 2, 2],
-        "rank": [1, 2, 3, 1, 2, 3, 1, 2, 3],
-        "category_name": [
-            "bed_bath_table", "health_beauty", "sports_leisure",
-            "bed_bath_table", "health_beauty", "computers_accessories",
-            "health_beauty", "computers_accessories", "watches_gifts"
-        ],
-        "total_sold": [5100, 4200, 3900, 3200, 2800, 2600, 1200, 1150, 980],
-        "total_revenue": [580000, 520000, 470000, 390000, 350000, 320000, 180000, 175000, 160000]
-    })
 
 # ─────────────────────────────────────────────────────────
-# Header UI
+# Header & Sidebar
 # ─────────────────────────────────────────────────────────
-st.markdown('<p class="main-title">🛒 Brazilian E-Commerce Analytics & Regional Clustering</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Sistem Big Data End-to-End: Apache Kafka ➔ PostgreSQL ➔ Apache Spark (MLlib K-Means) ➔ Streamlit Dashboard</p>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="main-title">🛒 Segmentasi Wilayah Pelanggan E-Commerce Olist (K-Means & Big Data)</p>',
+    unsafe_allow_html=True,
+)
+st.markdown(
+    '<p class="sub-title">Pipeline End-to-End: 9 CSV Olist ➔ Apache Kafka ➔ PostgreSQL Staging ➔ Apache Spark (Spark SQL + MLlib K-Means) ➔ Analytics Mart ➔ Streamlit</p>',
+    unsafe_allow_html=True,
+)
 
-# ─────────────────────────────────────────────────────────
-# Sidebar
-# ─────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://img.icons8.com/color/96/000000/apache-spark.png", width=60)
-    st.header("⚙️ Konfigurasi Sistem")
-    st.info("""
-    **Arsitektur Pipeline:**
-    - **Dataset**: Olist E-Commerce (9 CSV)
-    - **Ingestion**: Apache Kafka (9 Topics)
-    - **Staging**: PostgreSQL Staging Area
-    - **Batch Processing**: Apache Spark
-    - **Clustering**: PySpark MLlib K-Means
-    """)
+    st.header("⚙️ Arsitektur & Kontrol")
+    if st.button("🔄 Muat Ulang Data Spark Mart", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.info(
+        """
+        **Skema Data Pipeline:**
+        - **Ingestion**: Apache Kafka (9 Topik)
+        - **Raw Storage**: PostgreSQL (`staging_*`)
+        - **Processing & ML**: Apache Spark (`eda_spark.py`)
+        - **Serving Layer**: Spark Analytics Mart (`analytics_*`)
+        - **Metode Klasterisasi**: PySpark MLlib K-Means (Z-Score + Elbow + Silhouette)
+        """
+    )
     st.markdown("---")
-    st.markdown("**Kelompok Praktikum Big Data:**")
-    st.caption("• Josua Abrianto H. (J0403241062)")
+    st.markdown("**Tim Peneliti (TRPL SV IPB):**")
+    st.caption("• Josua Abrianto Harianja (J0403241062)")
     st.caption("• Zafira Ryani Putri (J0403241139)")
     st.caption("• Ben Azaria (J0403241135)")
     st.caption("• Nur'Afia Avanza (J0403241008)")
 
-# ─────────────────────────────────────────────────────────
-# Tabs
-# ─────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Ringkasan & KPI",
-    "🗺️ Distribusi Geografis",
-    "📦 Analisis Kategori Produk",
-    "🤖 K-Means Clustering & Evaluasi (Elbow + Siluet)"
-])
+# Muat seluruh tabel hasil olahan Spark
+df_kpi = load_analytics_table("kpi_summary")
+df_pay = load_analytics_table("payment_dist")
+df_status = load_analytics_table("order_status")
+df_monthly = load_analytics_table("monthly_trend")
+df_cities = load_analytics_table("top_cities")
+df_categories = load_analytics_table("top_categories")
+df_eval = load_analytics_table("kmeans_eval")
+df_states = load_analytics_table("state_clusters")
+df_cluster_sum = load_analytics_table("cluster_summary")
+df_cluster_prod = load_analytics_table("cluster_products")
+df_density = load_analytics_table("density_comparison")
+
+if df_kpi.empty or df_states.empty or df_eval.empty:
+    st.error(
+        "⚠️ Tabel hasil analitik Apache Spark (`analytics_*`) belum ditemukan di PostgreSQL. "
+        "Pastikan Anda telah menjalankan perintah `python eda_spark.py` terlebih dahulu."
+    )
+    st.stop()
+
+kpi_row = df_kpi.iloc[0]
+
+tab1, tab2, tab3, tab4 = st.tabs(
+    [
+        "📊 Ringkasan & KPI",
+        "🗺️ Sebaran Geografis (RQ1)",
+        "📦 Kategori Produk & Preferensi Klaster (RQ3)",
+        "🤖 K-Means Clustering & Pola Konsumsi (RQ2 & RQ4)",
+    ]
+)
 
 # ─────────────────────────────────────────────────────────
-# TAB 1: RINGKASAN & KPI
+# TAB 1: RINGKASAN & KPI EKOSISTEM E-COMMERCE
 # ─────────────────────────────────────────────────────────
 with tab1:
-    st.subheader("Ringkasan Metrik Utama E-Commerce")
-    
-    kpi = fallback_overview()
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Total Pelanggan", f"{kpi['total_customers']:,}")
-    with col2:
-        st.metric("Total Pesanan", f"{kpi['total_orders']:,}")
-    with col3:
-        st.metric("Total Revenue", f"R$ {kpi['total_revenue']:,.2f}")
-    with col4:
-        st.metric("Rata-rata Rating", f"⭐ {kpi['avg_review']:.2f} / 5.0")
-    with col5:
-        st.metric("Total Wilayah (State)", f"{kpi['total_states']} States")
+    st.subheader("Ringkasan Metrik Utama Hasil Olahan Spark SQL")
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Pelanggan Unik", f"{int(kpi_row['total_unique_customers']):,}")
+    c2.metric("Pesanan Terkirim", f"{int(kpi_row['total_delivered_orders']):,}")
+    c3.metric("Total Pendapatan", f"R$ {float(kpi_row['total_revenue']):,.2f}")
+    c4.metric("Rata-rata Pesanan", f"R$ {float(kpi_row['avg_order_value']):,.2f}")
+    c5.metric("Rata-rata Ongkir", f"R$ {float(kpi_row['avg_freight_value']):,.2f}")
+    c6.metric("Skor Ulasan", f"⭐ {float(kpi_row['avg_review_score']):.2f} / 5.0")
 
     st.markdown("---")
-    
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.markdown("##### 💳 Distribusi Metode Pembayaran")
-        df_pay_query = "SELECT payment_type, COUNT(order_id) as total_trans, SUM(payment_value) as total_val FROM staging_payments GROUP BY payment_type"
-        df_pay = load_data(df_pay_query, lambda: pd.DataFrame({
-            "payment_type": ["credit_card", "boleto", "voucher", "debit_card"],
-            "total_trans": [76795, 19784, 5775, 1529],
-            "total_val": [12542084.19, 2869361.27, 379436.87, 217989.79]
-        }))
-        fig_pay = px.pie(
-            df_pay, values="total_val", names="payment_type",
-            title="Porsi Nilai Transaksi per Metode Pembayaran (BRL)",
-            hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        st.plotly_chart(fig_pay, use_container_width=True)
 
-    with col_right:
-        st.markdown("##### 📈 Status Pesanan (Order Status)")
-        df_status_query = "SELECT order_status, COUNT(order_id) as count FROM staging_orders GROUP BY order_status"
-        df_status = load_data(df_status_query, lambda: pd.DataFrame({
-            "order_status": ["delivered", "shipped", "canceled", "unavailable", "invoiced", "processing"],
-            "count": [96478, 1107, 625, 609, 314, 301]
-        }))
-        fig_status = px.bar(
-            df_status.sort_values(by="count", ascending=True),
-            x="count", y="order_status", orientation='h',
-            title="Jumlah Pesanan Berdasarkan Status Order",
-            color="count", color_continuous_scale="Blues"
+    if not df_monthly.empty:
+        st.markdown("##### 📅 Tren Volume Pesanan dan Nilai Pendapatan Bulanan (2017–2018)")
+        fig_trend = go.Figure()
+        fig_trend.add_trace(
+            go.Bar(
+                x=df_monthly["order_month"],
+                y=df_monthly["total_orders"],
+                name="Total Pesanan Terkirim",
+                marker_color="#3B82F6",
+                yaxis="y1",
+            )
         )
-        st.plotly_chart(fig_status, use_container_width=True)
+        fig_trend.add_trace(
+            go.Scatter(
+                x=df_monthly["order_month"],
+                y=df_monthly["total_revenue"],
+                name="Total Pendapatan (R$)",
+                mode="lines+markers",
+                line=dict(color="#DC2626", width=3),
+                yaxis="y2",
+            )
+        )
+        fig_trend.update_layout(
+            xaxis=dict(title="Bulan Transaksi"),
+            yaxis=dict(title="Jumlah Pesanan", side="left"),
+            yaxis2=dict(title="Total Pendapatan (R$)", side="right", overlaying="y", showgrid=False),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            height=390,
+            margin=dict(l=20, r=20, t=40, b=20),
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+    col_l, col_r = st.columns(2)
+    with col_l:
+        st.markdown("##### 💳 Distribusi Metode Pembayaran")
+        if not df_pay.empty:
+            fig_pay = px.pie(
+                df_pay,
+                values="total_value",
+                names="payment_type",
+                hover_data=["total_transactions", "avg_value", "pct_value"],
+                title="Proporsi Nilai Transaksi per Metode Pembayaran (R$)",
+                hole=0.42,
+                color_discrete_sequence=px.colors.qualitative.Safe,
+            )
+            st.plotly_chart(fig_pay, use_container_width=True)
+
+    with col_r:
+        st.markdown("##### 📈 Distribusi Status Pesanan")
+        if not df_status.empty:
+            fig_status = px.bar(
+                df_status.sort_values("total_orders", ascending=True),
+                x="total_orders",
+                y="order_status",
+                orientation="h",
+                text="pct_orders",
+                title="Jumlah & Persentase Pesanan Berdasarkan Status",
+                labels={"total_orders": "Jumlah Pesanan", "order_status": "Status Pesanan"},
+                color="total_orders",
+                color_continuous_scale="Blues",
+            )
+            fig_status.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+            st.plotly_chart(fig_status, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────
-# TAB 2: DISTRIBUSI GEOGRAFIS
+# TAB 2: SEBARAN GEOGRAFIS PELANGGAN & TRANSAKSI (RQ1)
 # ─────────────────────────────────────────────────────────
 with tab2:
-    st.subheader("Analisis Sebaran Wilayah & Geografis Pelanggan")
-    
-    df_state = load_data("SELECT * FROM clustering_state_results", fallback_state_clusters)
-    
-    col_map1, col_map2 = st.columns([1, 1])
-    
-    with col_map1:
-        st.markdown("##### 🏢 Top 10 State Berdasarkan Total Transaksi (Revenue)")
-        top_states_rev = df_state.sort_values(by="total_revenue", ascending=False).head(10)
-        fig_top_rev = px.bar(
-            top_states_rev, x="customer_state", y="total_revenue",
-            color="total_revenue", color_continuous_scale="Viridis",
-            labels={"total_revenue": "Total Revenue (R$)", "customer_state": "State"},
-            title="Top 10 State dengan Penjualan Tertinggi"
-        )
-        st.plotly_chart(fig_top_rev, use_container_width=True)
+    st.subheader("🗺️ [RQ1] Wilayah dengan Jumlah Pelanggan dan Volume Transaksi Tertinggi")
 
-    with col_map2:
-        st.markdown("##### 🚚 Rata-rata Biaya Ongkir (Freight) per State")
-        top_states_freight = df_state.sort_values(by="avg_freight_value", ascending=False).head(10)
-        fig_top_freight = px.bar(
-            top_states_freight, x="customer_state", y="avg_freight_value",
-            color="avg_freight_value", color_continuous_scale="Reds",
-            labels={"avg_freight_value": "Avg Freight (R$)", "customer_state": "State"},
-            title="Top 10 State dengan Biaya Ongkir Tertinggi (Wilayah Terpencil)"
-        )
-        st.plotly_chart(fig_top_freight, use_container_width=True)
+    col_geo_map, col_geo_bar = st.columns([1.15, 1])
 
-    st.markdown("##### 🗺️ Tabel Sebaran Lengkap per Wilayah (27 Brazilian States)")
+    with col_geo_map:
+        st.markdown("##### 🌎 Peta Interaktif Sebaran Pelanggan & Klaster Wilayah di Brasil")
+        fig_map = px.scatter_geo(
+            df_states,
+            lat="lat",
+            lon="lng",
+            size="total_customers",
+            color="cluster_name",
+            hover_name="customer_state",
+            hover_data={
+                "total_customers": ":,.0f",
+                "total_orders": ":,.0f",
+                "total_revenue": ":,.2f",
+                "avg_order_value": ":,.2f",
+                "avg_freight_value": ":,.2f",
+                "avg_review_score": ":.2f",
+                "lat": False,
+                "lng": False,
+            },
+            size_max=45,
+            scope="south america",
+            title="Peta Distribusi Pelanggan Unik & Klaster Negara Bagian Brasil",
+            color_discrete_sequence=["#1D4ED8", "#10B981", "#F59E0B"],
+        )
+        fig_map.update_geos(
+            center=dict(lat=-14.235, lon=-51.925),
+            projection_scale=2.4,
+            showcountries=True,
+            countrycolor="#CBD5E1",
+            showland=True,
+            landcolor="#F8FAFC",
+        )
+        fig_map.update_layout(height=470, margin=dict(l=0, r=0, t=40, b=0))
+        st.plotly_chart(fig_map, use_container_width=True)
+
+    with col_geo_bar:
+        st.markdown("##### 🏆 Top 10 Negara Bagian Berdasarkan Jumlah Pelanggan Unik")
+        top10_states = df_states.sort_values("total_customers", ascending=False).head(10)
+        fig_state_cust = px.bar(
+            top10_states.sort_values("total_customers", ascending=True),
+            x="total_customers",
+            y="customer_state",
+            orientation="h",
+            color="total_revenue",
+            color_continuous_scale="Viridis",
+            text="total_customers",
+            labels={
+                "customer_state": "Negara Bagian (State)",
+                "total_customers": "Pelanggan Unik",
+                "total_revenue": "Pendapatan (R$)",
+            },
+            title="10 Negara Bagian dengan Pelanggan Unik & Pendapatan Tertinggi",
+        )
+        fig_state_cust.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+        fig_state_cust.update_layout(height=470)
+        st.plotly_chart(fig_state_cust, use_container_width=True)
+
+    col_city, col_freight = st.columns(2)
+
+    with col_city:
+        st.markdown("##### 🏙️ Top 10 Kota dengan Jumlah Pelanggan Unik Tertinggi")
+        if not df_cities.empty:
+            top10_cities = df_cities.sort_values("total_unique_customers", ascending=False).head(10).copy()
+            top10_cities["city_label"] = (
+                top10_cities["customer_city"].str.title() + " (" + top10_cities["customer_state"] + ")"
+            )
+            fig_cities = px.bar(
+                top10_cities.sort_values("total_unique_customers", ascending=True),
+                x="total_unique_customers",
+                y="city_label",
+                orientation="h",
+                color="total_revenue",
+                color_continuous_scale="Tealgrn",
+                labels={
+                    "city_label": "Kota (State)",
+                    "total_unique_customers": "Pelanggan Unik",
+                    "total_revenue": "Total Pendapatan (R$)",
+                },
+                title="10 Kota Terbesar Berdasarkan Pelanggan Unik",
+            )
+            st.plotly_chart(fig_cities, use_container_width=True)
+
+    with col_freight:
+        st.markdown("##### 🚚 10 Negara Bagian dengan Rata-Rata Ongkos Kirim Tertinggi")
+        top10_freight = df_states.sort_values("avg_freight_value", ascending=False).head(10)
+        fig_freight = px.bar(
+            top10_freight.sort_values("avg_freight_value", ascending=True),
+            x="avg_freight_value",
+            y="customer_state",
+            orientation="h",
+            color="avg_order_value",
+            color_continuous_scale="OrRd",
+            text="avg_freight_value",
+            labels={
+                "customer_state": "Negara Bagian",
+                "avg_freight_value": "Rata-rata Ongkir (R$)",
+                "avg_order_value": "Rata-rata Nilai Pesanan (R$)",
+            },
+            title="10 Negara Bagian dengan Beban Ongkos Kirim Tertinggi",
+        )
+        fig_freight.update_traces(texttemplate="R$ %{text:.2f}", textposition="outside")
+        st.plotly_chart(fig_freight, use_container_width=True)
+
+    st.markdown("##### 📋 Tabel Lengkap 7 Fitur + Indikator Logistik 27 Negara Bagian Brasil")
     st.dataframe(
-        df_state[["customer_state", "total_customers", "total_orders", "total_revenue", "avg_order_value", "avg_freight_value", "avg_review_score"]]
-        .sort_values(by="total_revenue", ascending=False),
-        use_container_width=True
+        df_states[
+            [
+                "customer_state",
+                "cluster",
+                "cluster_name",
+                "total_customers",
+                "total_orders",
+                "total_revenue",
+                "avg_order_value",
+                "total_items",
+                "avg_freight_value",
+                "freight_to_price_pct",
+                "avg_delivery_days",
+                "avg_review_score",
+            ]
+        ].sort_values("total_revenue", ascending=False),
+        use_container_width=True,
+        hide_index=True,
     )
 
 # ─────────────────────────────────────────────────────────
-# TAB 3: ANALISIS KATEGORI PRODUK
+# TAB 3: ANALISIS KATEGORI PRODUK NASIONAL & PER KLASTER (RQ3)
 # ─────────────────────────────────────────────────────────
 with tab3:
-    st.subheader("Kategori Produk Terpopuler & Nilai Penjualan")
-    
-    df_top_prod = load_data(
-        """
-        SELECT COALESCE(ct.product_category_name_english, pr.product_category_name, 'Other') AS category_name,
-               COUNT(oi.order_item_id) AS total_items_sold,
-               ROUND(SUM(oi.price)::numeric, 2) AS total_sales
-        FROM staging_order_items oi
-        JOIN staging_products pr ON oi.product_id = pr.product_id
-        LEFT JOIN staging_category_translation ct ON pr.product_category_name = ct.product_category_name
-        GROUP BY 1
-        ORDER BY total_items_sold DESC
-        LIMIT 15
-        """,
-        lambda: pd.DataFrame({
-            "category_name": [
-                "bed_bath_table", "health_beauty", "sports_leisure", "furniture_decor",
-                "computers_accessories", "housewares", "watches_gifts", "telephony",
-                "garden_tools", "auto", "toys", "cool_stuff", "perfumery", "baby", "electronics"
-            ],
-            "total_items_sold": [11115, 9670, 8641, 8334, 7827, 6964, 5991, 4545, 4347, 4235, 4117, 3796, 3419, 3065, 2767],
-            "total_sales": [1036813.20, 1258681.34, 988048.97, 729762.49, 910974.35, 632248.66, 1205005.68, 323667.53, 485256.46, 596644.83, 483946.60, 635290.85, 399124.87, 401655.80, 160246.74]
-        })
-    )
-    
-    col_prod1, col_prod2 = st.columns(2)
-    with col_prod1:
-        fig_cat_vol = px.bar(
-            df_top_prod.sort_values(by="total_items_sold", ascending=True),
-            x="total_items_sold", y="category_name", orientation='h',
-            title="Top 15 Kategori Berdasarkan Kuantitas Item Terjual",
-            color="total_items_sold", color_continuous_scale="Teal"
-        )
-        st.plotly_chart(fig_cat_vol, use_container_width=True)
+    st.subheader("📦 [RQ3] Kategori Produk Terpopuler Nasional & Dominasi per Klaster Wilayah")
 
-    with col_prod2:
-        fig_cat_sales = px.bar(
-            df_top_prod.sort_values(by="total_sales", ascending=True),
-            x="total_sales", y="category_name", orientation='h',
-            title="Top 15 Kategori Berdasarkan Total Nilai Penjualan (R$)",
-            color="total_sales", color_continuous_scale="Plasma"
-        )
-        st.plotly_chart(fig_cat_sales, use_container_width=True)
+    if not df_categories.empty:
+        top15_cat = df_categories.sort_values("total_items_sold", ascending=False).head(15)
+        col_p1, col_p2 = st.columns(2)
 
-# ─────────────────────────────────────────────────────────
-# TAB 4: K-MEANS CLUSTERING (ELBOW & SILUET)
-# ─────────────────────────────────────────────────────────
-with tab4:
-    st.subheader("🤖 K-Means Clustering Wilayah: Evaluasi Model & Segmentasi")
-    
-    st.markdown("""
-    Pengelompokan wilayah pelanggan (State) dilakukan menggunakan **PySpark MLlib K-Means** berdasarkan 7 fitur agregat:
-    *Jumlah Pelanggan, Total Pesanan, Total Revenue, Avg Order Value, Total Items, Avg Biaya Ongkir (Freight), dan Rata-rata Skor Review.*
-    """)
-    
-    # 1. Evaluasi Elbow & Silhouette
-    df_eval = load_data("SELECT * FROM clustering_eval_metrics ORDER BY k", fallback_clustering_metrics)
-    
-    col_eval1, col_eval2 = st.columns(2)
-    
-    with col_eval1:
-        st.markdown("##### 📉 1. Elbow Method (Inertia / WSSSE Cost)")
-        fig_elbow = px.line(
-            df_eval, x="k", y="wssse_cost", markers=True,
-            title="Elbow Method Curve (Menentukan Titik Siku)",
-            labels={"k": "Jumlah Cluster (K)", "wssse_cost": "WSSSE (Within Set Sum of Squared Errors)"}
-        )
-        fig_elbow.update_traces(line_color='#2563EB', line_width=3, marker=dict(size=10, color='#1D4ED8'))
-        st.plotly_chart(fig_elbow, use_container_width=True)
-        st.caption("💡 Titik siku (*elbow*) terlihat mulai melandai pada K=3 atau K=4.")
+        with col_p1:
+            fig_cat_vol = px.bar(
+                top15_cat.sort_values("total_items_sold", ascending=True),
+                x="total_items_sold",
+                y="category_name",
+                orientation="h",
+                color="total_items_sold",
+                color_continuous_scale="Teal",
+                labels={"total_items_sold": "Jumlah Item Terjual", "category_name": "Kategori Produk"},
+                title="Top 15 Kategori Produk Berdasarkan Volume Unit Terjual",
+            )
+            st.plotly_chart(fig_cat_vol, use_container_width=True)
 
-    with col_eval2:
-        st.markdown("##### 📊 2. Silhouette Score Evaluation")
-        best_k_row = df_eval.loc[df_eval['silhouette_score'].idxmax()]
-        fig_sil = px.bar(
-            df_eval, x="k", y="silhouette_score",
-            title=f"Silhouette Score per K (Optimal K = {int(best_k_row['k'])} | Score = {best_k_row['silhouette_score']:.3f})",
-            labels={"k": "Jumlah Cluster (K)", "silhouette_score": "Silhouette Score"},
-            color="silhouette_score", color_continuous_scale="Viridis"
-        )
-        st.plotly_chart(fig_sil, use_container_width=True)
-        st.caption(f"★ **K={int(best_k_row['k'])}** menghasilkan separasi cluster paling solid dan kohesif.")
+        with col_p2:
+            top15_sales = df_categories.sort_values("total_sales", ascending=False).head(15)
+            fig_cat_sales = px.bar(
+                top15_sales.sort_values("total_sales", ascending=True),
+                x="total_sales",
+                y="category_name",
+                orientation="h",
+                color="total_sales",
+                color_continuous_scale="Plasma",
+                labels={"total_sales": "Total Nilai Penjualan (R$)", "category_name": "Kategori Produk"},
+                title="Top 15 Kategori Produk Berdasarkan Nilai Penjualan (R$)",
+            )
+            st.plotly_chart(fig_cat_sales, use_container_width=True)
 
     st.markdown("---")
-    
-    # 2. Visualisasi Cluster Wilayah
-    st.subheader("🗺️ Pemetaan Segmentasi Wilayah (Hasil Cluster K-Means)")
-    df_cluster_res = load_data("SELECT * FROM clustering_state_results", fallback_state_clusters)
-    
-    col_c1, col_c2 = st.columns([1.2, 1])
-    
-    with col_c1:
-        st.markdown("##### 🪐 Scatter Plot Cluster: Total Orders vs Total Revenue")
-        fig_scatter = px.scatter(
-            df_cluster_res,
+    st.markdown("#### 🎯 [RQ3] Perbandingan Kategori Produk Dominan pada Tiap Klaster Wilayah")
+
+    if not df_cluster_prod.empty:
+        fig_cluster_cat = px.bar(
+            df_cluster_prod,
+            x="category_name",
+            y="pct_of_cluster_items",
+            color="cluster_name",
+            barmode="group",
+            text="rank",
+            hover_data=["total_sold", "total_revenue", "avg_price", "avg_freight"],
+            labels={
+                "category_name": "Kategori Produk",
+                "pct_of_cluster_items": "Porsi terhadap Total Item Klaster (%)",
+                "cluster_name": "Klaster Wilayah",
+            },
+            title="Porsi 5 Kategori Produk Teratas terhadap Total Pembelian di Masing-Masing Klaster (%)",
+        )
+        fig_cluster_cat.update_traces(texttemplate="#%{text}", textposition="outside")
+        st.plotly_chart(fig_cluster_cat, use_container_width=True)
+
+        clusters_sorted = sorted(df_cluster_prod["cluster"].unique())
+        cols_cp = st.columns(len(clusters_sorted))
+        for idx, cid in enumerate(clusters_sorted):
+            sub_df = df_cluster_prod[df_cluster_prod["cluster"] == cid].sort_values("rank")
+            c_name = sub_df["cluster_name"].iloc[0]
+            with cols_cp[idx]:
+                st.markdown(f"**Klaster {cid}: {c_name}**")
+                st.dataframe(
+                    sub_df[
+                        [
+                            "rank",
+                            "category_name",
+                            "total_sold",
+                            "pct_of_cluster_items",
+                            "total_revenue",
+                            "avg_price",
+                        ]
+                    ].rename(
+                        columns={
+                            "rank": "#",
+                            "category_name": "Kategori",
+                            "total_sold": "Unit",
+                            "pct_of_cluster_items": "Porsi (%)",
+                            "total_revenue": "Penjualan (R$)",
+                            "avg_price": "Harga Rata2 (R$)",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+# ─────────────────────────────────────────────────────────
+# TAB 4: K-MEANS CLUSTERING & ANALISIS KEPADATAN (RQ2 & RQ4)
+# ─────────────────────────────────────────────────────────
+with tab4:
+    st.subheader("🤖 [RQ2] Evaluasi Jumlah Klaster Optimal (Elbow Method & Silhouette Score)")
+
+    df_eval_sorted = df_eval.sort_values("k")
+    opt_rows = df_eval_sorted[df_eval_sorted["is_optimal"] == True]
+    opt_row = opt_rows.iloc[0] if not opt_rows.empty else df_eval_sorted.iloc[1]
+    opt_k = int(opt_row["k"])
+
+    col_e1, col_e2 = st.columns(2)
+
+    with col_e1:
+        fig_elbow = go.Figure()
+        fig_elbow.add_trace(
+            go.Scatter(
+                x=df_eval_sorted["k"],
+                y=df_eval_sorted["wssse_cost"],
+                mode="lines+markers",
+                name="WSSSE (Inertia)",
+                line=dict(color="#2563EB", width=3),
+                marker=dict(size=10),
+            )
+        )
+        fig_elbow.add_trace(
+            go.Scatter(
+                x=[opt_k],
+                y=[float(opt_row["wssse_cost"])],
+                mode="markers+text",
+                name=f"Titik Siku Optimal (K={opt_k})",
+                text=[f"Optimal Elbow K={opt_k}"],
+                textposition="top right",
+                marker=dict(size=16, color="#DC2626", symbol="star"),
+            )
+        )
+        fig_elbow.update_layout(
+            title=f"Kurva Elbow Method (WSSSE) — Penurunan Terbesar pada K={opt_k} (-{float(opt_row['wssse_drop_pct']):.1f}%)",
+            xaxis_title="Jumlah Klaster (K)",
+            yaxis_title="Within-Cluster Sum of Squared Errors (WSSSE)",
+            height=380,
+        )
+        st.plotly_chart(fig_elbow, use_container_width=True)
+
+    with col_e2:
+        fig_sil = px.bar(
+            df_eval_sorted,
+            x="k",
+            y="silhouette_score",
+            color="elbow_distance",
+            text="silhouette_score",
+            color_continuous_scale="Viridis",
+            labels={
+                "k": "Jumlah Klaster (K)",
+                "silhouette_score": "Silhouette Score",
+                "elbow_distance": "Jarak Siku (Knee Distance)",
+            },
+            title=f"Evaluasi Silhouette Score & Knee Distance (K={opt_k} Terpilih)",
+        )
+        fig_sil.update_traces(texttemplate="%{text:.4f}", textposition="outside")
+        fig_sil.update_layout(height=380)
+        st.plotly_chart(fig_sil, use_container_width=True)
+
+    st.dataframe(
+        df_eval_sorted[
+            [
+                "k",
+                "wssse_cost",
+                "wssse_drop_pct",
+                "elbow_distance",
+                "silhouette_score",
+                "non_singleton_clusters",
+                "is_optimal",
+            ]
+        ].rename(
+            columns={
+                "k": "K",
+                "wssse_cost": "WSSSE (Inertia)",
+                "wssse_drop_pct": "Penurunan WSSSE (%)",
+                "elbow_distance": "Jarak Titik Siku (Kneedle)",
+                "silhouette_score": "Silhouette Score",
+                "non_singleton_clusters": "Jumlah Klaster Multi-Negara Bagian",
+                "is_optimal": "Klaster Optimal",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("---")
+    st.subheader(f"📊 Profil Karakteristik {opt_k} Klaster Negara Bagian Brasil (RQ2)")
+
+    col_sc1, col_sc2 = st.columns(2)
+    with col_sc1:
+        fig_sc_vol = px.scatter(
+            df_states,
             x="total_orders",
             y="total_revenue",
             size="total_customers",
-            color=df_cluster_res["cluster"].astype(str),
+            color="cluster_name",
             hover_name="customer_state",
             hover_data=["avg_order_value", "avg_freight_value", "avg_review_score"],
-            title="Distribusi Cluster Berdasarkan Volume Pesanan & Nilai Transaksi",
-            labels={"cluster": "Cluster ID", "total_orders": "Total Orders", "total_revenue": "Total Revenue (R$)"},
-            color_discrete_sequence=px.colors.qualitative.Bold
+            log_x=True,
+            log_y=True,
+            title="Peta Klaster: Volume Pesanan vs Total Pendapatan (Skala Logaritmik)",
+            labels={
+                "total_orders": "Total Pesanan (Log Scale)",
+                "total_revenue": "Total Pendapatan R$ (Log Scale)",
+                "cluster_name": "Klaster Wilayah",
+            },
+            color_discrete_sequence=["#1D4ED8", "#10B981", "#F59E0B"],
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_sc_vol, use_container_width=True)
 
-    with col_c2:
-        st.markdown("##### 📋 Profil Karakteristik Cluster")
-        cluster_summary = df_cluster_res.groupby("cluster").agg(
-            States_Count=("customer_state", "count"),
-            Avg_Revenue=("total_revenue", "mean"),
-            Avg_Ticket_Size=("avg_order_value", "mean"),
-            Avg_Freight=("avg_freight_value", "mean"),
-            Avg_Rating=("avg_review_score", "mean")
-        ).reset_index()
-        
-        # Penamaan Persona Cluster
-        persona_map = {
-            0: "🏆 Cluster 0: Mega Hub (Pusat Metropolitan & Volume Terbesar)",
-            1: "⭐ Cluster 1: High Potential Tier-2 (Volume Menengah, Pasar Stabil)",
-            2: "🌲 Cluster 2: Remote / Expanding Regions (Ongkir Tinggi, Nilai Keranjang Besar)"
-        }
-        cluster_summary["Persona"] = cluster_summary["cluster"].map(lambda x: persona_map.get(x, f"Cluster {x}"))
-        
+    with col_sc2:
+        fig_sc_log = px.scatter(
+            df_states,
+            x="avg_freight_value",
+            y="avg_order_value",
+            size="total_customers",
+            color="cluster_name",
+            text="customer_state",
+            hover_name="customer_state",
+            hover_data=["total_customers", "freight_to_price_pct", "avg_delivery_days", "avg_review_score"],
+            title="Hubungan Rata-Rata Ongkos Kirim vs Nilai Pesanan Rata-Rata (RQ4)",
+            labels={
+                "avg_freight_value": "Rata-rata Ongkos Kirim per Pesanan (R$)",
+                "avg_order_value": "Nilai Rata-rata Pesanan / Ticket Size (R$)",
+                "cluster_name": "Klaster Wilayah",
+            },
+            color_discrete_sequence=["#1D4ED8", "#10B981", "#F59E0B"],
+        )
+        fig_sc_log.update_traces(textposition="top center")
+        st.plotly_chart(fig_sc_log, use_container_width=True)
+
+    if not df_cluster_sum.empty:
+        st.markdown("##### 📋 Ringkasan Statistik Centroid & Anggota Klaster (`analytics_cluster_summary`)")
         st.dataframe(
-            cluster_summary.style.format({
-                "Avg_Revenue": "R$ {:,.2f}",
-                "Avg_Ticket_Size": "R$ {:,.2f}",
-                "Avg_Freight": "R$ {:,.2f}",
-                "Avg_Rating": "{:.2f}"
-            }),
-            use_container_width=True
+            df_cluster_sum[
+                [
+                    "cluster",
+                    "cluster_name",
+                    "total_states",
+                    "states_list",
+                    "avg_customers_per_state",
+                    "avg_orders_per_state",
+                    "avg_revenue_per_state",
+                    "avg_order_ticket_size",
+                    "avg_freight",
+                    "avg_freight_ratio_pct",
+                    "avg_delivery_days",
+                    "avg_satisfaction",
+                ]
+            ].rename(
+                columns={
+                    "cluster": "ID",
+                    "cluster_name": "Nama Klaster",
+                    "total_states": "Jml State",
+                    "states_list": "Daftar Negara Bagian",
+                    "avg_customers_per_state": "Rata2 Pelanggan",
+                    "avg_orders_per_state": "Rata2 Pesanan",
+                    "avg_revenue_per_state": "Rata2 Pendapatan (R$)",
+                    "avg_order_ticket_size": "Nilai Pesanan Rata2 (R$)",
+                    "avg_freight": "Rata2 Ongkir (R$)",
+                    "avg_freight_ratio_pct": "Rasio Ongkir/Harga (%)",
+                    "avg_delivery_days": "Durasi Kirim (Hari)",
+                    "avg_satisfaction": "Skor Ulasan",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
         )
-        
-        st.info("""
-        **Strategi Bisnis Berdasarkan Cluster:**
-        - **Cluster 0 (SP/Metropolitan)**: Fokus pada pengiriman Same-Day/Instant Delivery & variasi produk cepat saji.
-        - **Cluster 1 (Tier-2 States)**: Program loyalitas & bundling diskon produk populer.
-        - **Cluster 2 (Remote States)**: Subsidi ongkir/flat-rate shipping & penguatan logistik regional.
-        """)
 
-    # 3. Kategori Produk Dominan per Cluster
-    st.markdown("##### 📦 Kategori Produk Paling Laris pada Masing-Masing Cluster")
-    df_cluster_prod = load_data("SELECT * FROM clustering_top_products ORDER BY cluster, rank", fallback_top_products)
-    
-    cluster_ids = sorted(df_cluster_prod["cluster"].unique())
-    cols_prod_cluster = st.columns(len(cluster_ids))
-    
-    for idx, c_id in enumerate(cluster_ids):
-        with cols_prod_cluster[idx]:
-            st.markdown(f"**Cluster {c_id} Top Products**")
-            sub_prod = df_cluster_prod[df_cluster_prod["cluster"] == c_id]
-            st.dataframe(
-                sub_prod[["rank", "category_name", "total_sold", "total_revenue"]].rename(
-                    columns={"rank": "#", "category_name": "Kategori", "total_sold": "Terjual", "total_revenue": "Total (R$)"}
-                ),
-                use_container_width=True,
-                hide_index=True
+        st.markdown("##### 💡 Rekomendasi Strategi Pemasaran & Distribusi Berbasis Data Spark")
+        for _, row in df_cluster_sum.sort_values("cluster").iterrows():
+            st.info(
+                f"**Klaster {int(row['cluster'])} — {row['cluster_name']} ({int(row['total_states'])} Negara Bagian: {row['states_list']})**\n\n"
+                f"• **Karakteristik Utama**: Rata-rata pelanggan unik **{float(row['avg_customers_per_state']):,.1f}**, "
+                f"nilai pesanan rata-rata **R$ {float(row['avg_order_ticket_size']):,.2f}**, "
+                f"rata-rata ongkos kirim **R$ {float(row['avg_freight']):,.2f}** "
+                f"({float(row['avg_freight_ratio_pct']):.2f}% dari harga produk), "
+                f"waktu pengiriman rata-rata **{float(row['avg_delivery_days']):.1f} hari**, "
+                f"dan skor kepuasan **{float(row['avg_satisfaction']):.2f}/5.00**.\n"
+                f"• **Rekomendasi Strategi**: {row['strategy_recommendation']}"
             )
+
+    st.markdown("---")
+    st.subheader("⚖️ [RQ4] Perbedaan Pola Konsumsi Wilayah Kepadatan Pelanggan Tinggi vs Rendah")
+
+    if not df_density.empty:
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            fig_rq4_a = px.bar(
+                df_density,
+                x="density_tier",
+                y=["avg_order_value", "avg_freight_value"],
+                barmode="group",
+                text_auto=".2f",
+                title="Perbandingan Nilai Pesanan Rata-Rata vs Ongkos Kirim (R$)",
+                labels={"value": "Nilai dalam Real Brasil (R$)", "density_tier": "Kelompok Kepadatan Wilayah"},
+                color_discrete_sequence=["#0EA5E9", "#F43F5E"],
+            )
+            st.plotly_chart(fig_rq4_a, use_container_width=True)
+
+        with col_d2:
+            fig_rq4_b = px.bar(
+                df_density,
+                x="density_tier",
+                y=["share_customers_pct", "share_revenue_pct", "freight_to_price_pct"],
+                barmode="group",
+                text_auto=".2f",
+                title="Pangsa Pelanggan (%), Pangsa Pendapatan (%), & Rasio Beban Ongkir (%)",
+                labels={"value": "Persentase (%)", "density_tier": "Kelompok Kepadatan Wilayah"},
+                color_discrete_sequence=["#6366F1", "#10B981", "#F59E0B"],
+            )
+            st.plotly_chart(fig_rq4_b, use_container_width=True)
+
+        st.dataframe(
+            df_density.rename(
+                columns={
+                    "cluster": "ID Klaster",
+                    "density_tier": "Tingkat Kepadatan Wilayah",
+                    "total_states": "Jumlah Negara Bagian",
+                    "share_customers_pct": "Pangsa Pelanggan Nasional (%)",
+                    "share_orders_pct": "Pangsa Pesanan Nasional (%)",
+                    "share_revenue_pct": "Pangsa Pendapatan Nasional (%)",
+                    "avg_customers_per_state": "Rata2 Pelanggan/State",
+                    "avg_order_value": "Nilai Pesanan Rata2 (R$)",
+                    "avg_items_per_order": "Rata2 Item/Pesanan",
+                    "avg_freight_value": "Rata2 Ongkir (R$)",
+                    "freight_to_price_pct": "Rasio Ongkir thd Harga (%)",
+                    "avg_delivery_days": "Rata2 Waktu Kirim (Hari)",
+                    "avg_review_score": "Rata2 Skor Ulasan",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )

@@ -1,112 +1,105 @@
-# Proyek Praktikum Teknologi Big Data: Olist Brazilian E-Commerce
+# Proyek Teknologi Big Data: Segmentasi Wilayah Pelanggan E-Commerce Olist (K-Means & Apache Spark)
 
-Sistem Big Data End-to-End untuk analisis dan segmentasi wilayah pelanggan menggunakan dataset **Brazilian E-Commerce Public Dataset by Olist**.
-
----
-
-## 🏗️ Arsitektur Sistem
-
-```
-[ 9 File CSV Data Source ]
-           │
-           ▼
-   [ Apache Kafka ] (Ingestion 9 Topik)
-           │
-           ▼
-  [ PostgreSQL Staging ] (9 Tabel Staging Relasional)
-           │
-           ▼
-    [ Apache Spark ] (Batch Processing & Feature Engineering)
-           │
-           ▼
- [ Spark SQL + MLlib K-Means ] (Evaluasi Elbow & Silhouette Score)
-           │
-           ▼
- [ Streamlit Dashboard ] (Visualisasi Interaktif & Analisis Strategi)
-```
+Implementasi arsitektur sistem Big Data *end-to-end* untuk analisis eksploratif dan pengelompokan wilayah pelanggan (negara bagian) menggunakan dataset **Brazilian E-Commerce Public Dataset by Olist** (~1,55 juta baris, 9 berkas CSV).
 
 ---
 
-## 📁 Struktur File Proyek
+## 🏗️ Arsitektur & Skema Dua Lapis (*Two-Layer Architecture*)
+
+Sistem ini menerapkan pemisahan tegas antara penyimpanan data mentah (*Staging Layer*) dan hasil pemrosesan analitik terdistribusi (*Spark Analytics Mart Layer*). Seluruh komputasi agregasi, *join*, *feature engineering*, dan *K-Means Clustering* dikerjakan **100% menggunakan Apache Spark (`Spark SQL` & `PySpark MLlib`)**, tanpa kueri pengolahan SQL biasa di lapisan aplikasi dan tanpa data *hardcode*.
+
+```
+[ 9 File CSV Olist (data/) ]
+             │
+             ▼
+     [ producer.py ]  ───►  Apache Kafka (9 Topik Event JSON)
+                                     │
+                                     ▼
+                             [ consumer.py ]
+                                     │
+                                     ▼
+            ┌────────────────────────────────────────────────┐
+            │ PostgreSQL — Layer 1: Staging (staging_*)      │
+            │  • staging_customers       • staging_orders     │
+            │  • staging_order_items     • staging_payments   │
+            │  • staging_reviews         • staging_products   │
+            │  • staging_sellers         • staging_geolocation│
+            │  • staging_category_translation                │
+            └────────────────────────┬───────────────────────┘
+                                     │ (Spark JDBC Read)
+                                     ▼
+            ┌────────────────────────────────────────────────┐
+            │ Apache Spark Batch Processing (eda_spark.py)   │
+            │  • Spark SQL (Agregasi CTE Bebas Join Fan-Out) │
+            │  • StandardScaler (Z-Score Normalization)      │
+            │  • MLlib K-Means (Evaluasi Elbow & Silhouette) │
+            │  • Analisis Pertanyaan Penelitian RQ1 – RQ4    │
+            └────────────────────────┬───────────────────────┘
+                                     │ (Spark JDBC Write)
+                                     ▼
+            ┌────────────────────────────────────────────────┐
+            │ PostgreSQL — Layer 2: Analytics Mart           │
+            │  • analytics_kpi_summary                       │
+            │  • analytics_top_cities          (RQ1)         │
+            │  • analytics_payment_dist                      │
+            │  • analytics_order_status                      │
+            │  • analytics_monthly_trend                     │
+            │  • analytics_top_categories                    │
+            │  • analytics_kmeans_eval         (RQ2)         │
+            │  • analytics_state_clusters      (RQ1 & RQ2)   │
+            │  • analytics_cluster_summary     (RQ2)         │
+            │  • analytics_cluster_products    (RQ3)         │
+            │  • analytics_density_comparison  (RQ4)         │
+            └────────────────────────┬───────────────────────┘
+                                     │
+                                     ▼
+            [ dashboard.py ] (Streamlit Interactive Dashboard)
+```
+
+---
+
+## 📁 Struktur Direktori Proyek
 
 ```
 proyek/
-├── data/                                      # Folder 9 file CSV Olist
-│   ├── olist_customers_dataset.csv
-│   ├── olist_orders_dataset.csv
-│   ├── olist_order_items_dataset.csv
-│   ├── olist_order_payments_dataset.csv
-│   ├── olist_order_reviews_dataset.csv
-│   ├── olist_products_dataset.csv
-│   ├── olist_sellers_dataset.csv
-│   ├── olist_geolocation_dataset.csv
-│   └── product_category_name_translation.csv
-├── producer.py                                # Kafka Producer (Ingestion 9 CSV ke 9 topik)
-├── consumer.py                                # Kafka Consumer (Simpan event ke PostgreSQL Staging)
-├── eda_spark.py                               # Spark SQL EDA & MLlib K-Means (Elbow + Silhouette)
-├── dashboard.py                               # Interactive Streamlit Web Dashboard
-├── requirements.txt                           # Library & dependencies Python
-└── README.md                                  # Dokumentasi dan panduan eksekusi
+├── data/                                      # 9 berkas CSV dataset Olist
+├── config.py                                  # Konfigurasi terpusat (DB, Kafka, nama tabel)
+├── producer.py                                # Kafka Producer (CSV -> 9 Topik Kafka)
+├── consumer.py                                # Kafka Consumer (9 Topik Kafka -> staging_*)
+├── eda_spark.py                               # Spark SQL EDA & MLlib K-Means -> analytics_*
+├── dashboard.py                               # Streamlit Dashboard (Membaca analytics_*)
+├── JURNAL_JTI_UTU.md                          # Naskah lengkap artikel jurnal (Bab 1 - Bab 4)
+├── requirements.txt                           # Daftar dependensi paket Python
+└── README.md                                  # Dokumentasi proyek
 ```
 
 ---
 
-## 🚀 Panduan Menjalankan Sistem
+## 🚀 Cara Menjalankan Pipeline End-to-End
 
-### 1. Prasyarat & Instalasi
-Pastikan dependensi telah terinstal:
+### 1. Instalasi Dependensi
 ```bash
 pip install -r requirements.txt
 ```
 
-Pastikan layanan berikut berjalan di lokal:
-1. **PostgreSQL** di port `5432` dengan database `olist_db`, user `postgres`, password `password`.
-2. **Apache Kafka & Zookeeper** di port `9092`.
-
----
-
-### 2. Jalankan Ingestion Layer (Kafka Producer & Consumer)
-
-**Terminal 1 (Jalankan Consumer untuk menangkap event & buat tabel staging):**
+### 2. Tahap Ingestion (Apache Kafka $\rightarrow$ PostgreSQL Staging)
+Jalankan `consumer.py` dan `producer.py` untuk mengalirkan 9 berkas CSV ke tabel `staging_*`:
 ```bash
+# Terminal 1
 python consumer.py
-```
 
-**Terminal 2 (Jalankan Producer untuk mempublikasikan 9 dataset ke Kafka):**
-```bash
+# Terminal 2
 python producer.py
 ```
 
----
-
-### 3. Jalankan Batch Processing, EDA & K-Means (Apache Spark)
-
+### 3. Tahap Processing & K-Means Clustering (Apache Spark)
+Jalankan `eda_spark.py` untuk memproses data dari `staging_*` menggunakan Spark SQL & PySpark MLlib, mengevaluasi nilai $K = 2 \dots 8$ (*Elbow Method* & *Silhouette Score*), serta menyimpan seluruh tabel hasil ke `analytics_*`:
 ```bash
 python eda_spark.py
 ```
-*Script ini akan:*
-- Membaca 9 tabel dari PostgreSQL staging.
-- Menjalankan analisis Spark SQL (distribusi wilayah, kategori produk terpopuler, dsb.).
-- Melakukan feature engineering & scaling per wilayah (State).
-- Menghitung **Elbow Method (WSSSE Cost)** dan **Silhouette Score** untuk $K = 2 \dots 8$.
-- Melatih model K-Means dengan $K$ optimal dan menyimpan hasil cluster ke PostgreSQL.
 
----
-
-### 4. Jalankan Dashboard Visualisasi (Streamlit)
-
+### 4. Tahap Visualisasi (Streamlit Dashboard)
 ```bash
 streamlit run dashboard.py
 ```
-
-Buka browser pada alamat: `http://localhost:8501`
-
-**Fitur Dashboard:**
-1. **📊 Ringkasan & KPI**: Total customer, revenue, rating, status order, dan metode pembayaran.
-2. **🗺️ Distribusi Geografis**: Top 10 state per transaksi, rata-rata ongkir logistik, dan tabel 27 negara bagian Brazil.
-3. **📦 Analisis Kategori Produk**: 15 kategori terlaris berdasarkan kuantitas & nominal penjualan.
-4. **🤖 K-Means Clustering & Evaluasi (Elbow + Siluet)**:
-   - Kurva **Elbow Method** dan grafik **Silhouette Score per K**.
-   - Scatter plot interaktif cluster wilayah (Orders vs Revenue).
-   - Tabel profil & persona cluster serta rekomendasi strategi bisnis.
-   - Kategori produk paling diminati pada masing-masing kelompok cluster.
+Buka `http://localhost:8501` di peramban untuk menjelajahi 4 tab interaktif yang menjawab **RQ1, RQ2, RQ3, dan RQ4**.
