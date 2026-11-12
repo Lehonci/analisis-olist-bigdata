@@ -237,7 +237,10 @@ with tab2:
             color_discrete_sequence=["#1D4ED8", "#10B981", "#F59E0B"],
         )
         fig_map.update_geos(
-            center=dict(lat=-14.235, lon=-51.925),
+            center=dict(
+                lat=float(df_states["lat"].mean()),
+                lon=float(df_states["lng"].mean()),
+            ),
             projection_scale=2.4,
             showcountries=True,
             countrycolor="#CBD5E1",
@@ -315,24 +318,29 @@ with tab2:
         fig_freight.update_traces(texttemplate="R$ %{text:.2f}", textposition="outside")
         st.plotly_chart(fig_freight, use_container_width=True)
 
-    st.markdown("##### 📋 Tabel Lengkap 7 Fitur + Indikator Logistik 27 Negara Bagian Brasil")
+    st.markdown("##### 📋 Tabel Lengkap Fitur Transaksi, Demografi & Indikator Logistik 27 Negara Bagian Brasil")
+    state_display_cols = [
+        c
+        for c in [
+            "customer_state",
+            "cluster",
+            "cluster_name",
+            "total_customers",
+            "total_cities",
+            "total_sellers",
+            "total_orders",
+            "total_revenue",
+            "avg_order_value",
+            "total_items",
+            "avg_freight_value",
+            "freight_to_price_pct",
+            "avg_delivery_days",
+            "avg_review_score",
+        ]
+        if c in df_states.columns
+    ]
     st.dataframe(
-        df_states[
-            [
-                "customer_state",
-                "cluster",
-                "cluster_name",
-                "total_customers",
-                "total_orders",
-                "total_revenue",
-                "avg_order_value",
-                "total_items",
-                "avg_freight_value",
-                "freight_to_price_pct",
-                "avg_delivery_days",
-                "avg_review_score",
-            ]
-        ].sort_values("total_revenue", ascending=False),
+        df_states[state_display_cols].sort_values("total_revenue", ascending=False),
         use_container_width=True,
         hide_index=True,
     )
@@ -563,30 +571,37 @@ with tab4:
         st.plotly_chart(fig_sc_log, use_container_width=True)
 
     if not df_cluster_sum.empty:
-        st.markdown("##### 📋 Ringkasan Statistik Centroid & Anggota Klaster (`analytics_cluster_summary`)")
+        st.markdown("##### 📋 Ringkasan Statistik Centroid, Demografi & Anggota Klaster (`analytics_cluster_summary`)")
+        cluster_sum_cols = [
+            c
+            for c in [
+                "cluster",
+                "cluster_name",
+                "total_states",
+                "states_list",
+                "avg_customers_per_state",
+                "avg_cities_per_state",
+                "sum_sellers",
+                "avg_orders_per_state",
+                "avg_revenue_per_state",
+                "avg_order_ticket_size",
+                "avg_freight",
+                "avg_freight_ratio_pct",
+                "avg_delivery_days",
+                "avg_satisfaction",
+            ]
+            if c in df_cluster_sum.columns
+        ]
         st.dataframe(
-            df_cluster_sum[
-                [
-                    "cluster",
-                    "cluster_name",
-                    "total_states",
-                    "states_list",
-                    "avg_customers_per_state",
-                    "avg_orders_per_state",
-                    "avg_revenue_per_state",
-                    "avg_order_ticket_size",
-                    "avg_freight",
-                    "avg_freight_ratio_pct",
-                    "avg_delivery_days",
-                    "avg_satisfaction",
-                ]
-            ].rename(
+            df_cluster_sum[cluster_sum_cols].rename(
                 columns={
                     "cluster": "ID",
                     "cluster_name": "Nama Klaster",
                     "total_states": "Jml State",
                     "states_list": "Daftar Negara Bagian",
                     "avg_customers_per_state": "Rata2 Pelanggan",
+                    "avg_cities_per_state": "Rata2 Kota/State",
+                    "sum_sellers": "Total Seller",
                     "avg_orders_per_state": "Rata2 Pesanan",
                     "avg_revenue_per_state": "Rata2 Pendapatan (R$)",
                     "avg_order_ticket_size": "Nilai Pesanan Rata2 (R$)",
@@ -654,6 +669,8 @@ with tab4:
                     "share_orders_pct": "Pangsa Pesanan Nasional (%)",
                     "share_revenue_pct": "Pangsa Pendapatan Nasional (%)",
                     "avg_customers_per_state": "Rata2 Pelanggan/State",
+                    "avg_cities_per_state": "Rata2 Kota/State",
+                    "total_sellers": "Total Seller",
                     "avg_order_value": "Nilai Pesanan Rata2 (R$)",
                     "avg_items_per_order": "Rata2 Item/Pesanan",
                     "avg_freight_value": "Rata2 Ongkir (R$)",

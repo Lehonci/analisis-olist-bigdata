@@ -5,4 +5,5 @@ venv/
 .env
 .streamlit/secrets.toml
 *.log
-.requirements.txt
+requirements.txt
+docs/

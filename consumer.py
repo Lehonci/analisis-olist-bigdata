@@ -6,17 +6,18 @@ from config import (
     DB_CONN_PARAMS,
     KAFKA_BOOTSTRAP_SERVERS,
     KAFKA_CONSUMER_GROUP,
+    STAGING_TABLES,
 )
 
 CREATE_TABLES = [
-    """CREATE TABLE IF NOT EXISTS staging_customers (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['customers']} (
         customer_id              VARCHAR PRIMARY KEY,
         customer_unique_id       VARCHAR,
         customer_zip_code_prefix INT,
         customer_city            VARCHAR,
         customer_state           VARCHAR
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_orders (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['orders']} (
         order_id                      VARCHAR PRIMARY KEY,
         customer_id                   VARCHAR,
         order_status                  VARCHAR,
@@ -26,7 +27,7 @@ CREATE_TABLES = [
         order_delivered_customer_date VARCHAR,
         order_estimated_delivery_date VARCHAR
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_order_items (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['order_items']} (
         order_id            VARCHAR,
         order_item_id       INT,
         product_id          VARCHAR,
@@ -36,7 +37,7 @@ CREATE_TABLES = [
         freight_value       DOUBLE PRECISION,
         PRIMARY KEY (order_id, order_item_id)
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_payments (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['payments']} (
         order_id             VARCHAR,
         payment_sequential   INT,
         payment_type         VARCHAR,
@@ -44,15 +45,17 @@ CREATE_TABLES = [
         payment_value        DOUBLE PRECISION,
         PRIMARY KEY (order_id, payment_sequential)
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_reviews (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['reviews']} (
         review_id               VARCHAR,
         order_id                VARCHAR,
         review_score            INT,
+        review_comment_title    TEXT,
+        review_comment_message  TEXT,
         review_creation_date    VARCHAR,
         review_answer_timestamp VARCHAR,
         PRIMARY KEY (review_id, order_id)
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_products (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['products']} (
         product_id                 VARCHAR PRIMARY KEY,
         product_category_name      VARCHAR,
         product_name_lenght        INT,
@@ -63,13 +66,13 @@ CREATE_TABLES = [
         product_height_cm          DOUBLE PRECISION,
         product_width_cm           DOUBLE PRECISION
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_sellers (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['sellers']} (
         seller_id              VARCHAR PRIMARY KEY,
         seller_zip_code_prefix INT,
         seller_city            VARCHAR,
         seller_state           VARCHAR
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_geolocation (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['geolocation']} (
         id                          SERIAL PRIMARY KEY,
         geolocation_zip_code_prefix INT,
         geolocation_lat             DOUBLE PRECISION,
@@ -77,23 +80,23 @@ CREATE_TABLES = [
         geolocation_city            VARCHAR,
         geolocation_state           VARCHAR
     )""",
-    """CREATE TABLE IF NOT EXISTS staging_category_translation (
+    f"""CREATE TABLE IF NOT EXISTS {STAGING_TABLES['category_translation']} (
         product_category_name         VARCHAR PRIMARY KEY,
         product_category_name_english VARCHAR
     )""",
 ]
 
 INSERT_QUERIES = {
-    "ecommerce_customers": """
-        INSERT INTO staging_customers
+    "ecommerce_customers": f"""
+        INSERT INTO {STAGING_TABLES['customers']}
             (customer_id, customer_unique_id, customer_zip_code_prefix, customer_city, customer_state)
         VALUES
             (%(customer_id)s, %(customer_unique_id)s, %(customer_zip_code_prefix)s,
              %(customer_city)s, %(customer_state)s)
         ON CONFLICT (customer_id) DO NOTHING
     """,
-    "ecommerce_orders": """
-        INSERT INTO staging_orders
+    "ecommerce_orders": f"""
+        INSERT INTO {STAGING_TABLES['orders']}
             (order_id, customer_id, order_status, order_purchase_timestamp,
              order_approved_at, order_delivered_carrier_date,
              order_delivered_customer_date, order_estimated_delivery_date)
@@ -103,8 +106,8 @@ INSERT_QUERIES = {
              %(order_delivered_customer_date)s, %(order_estimated_delivery_date)s)
         ON CONFLICT (order_id) DO NOTHING
     """,
-    "ecommerce_order_items": """
-        INSERT INTO staging_order_items
+    "ecommerce_order_items": f"""
+        INSERT INTO {STAGING_TABLES['order_items']}
             (order_id, order_item_id, product_id, seller_id,
              shipping_limit_date, price, freight_value)
         VALUES
@@ -112,24 +115,25 @@ INSERT_QUERIES = {
              %(shipping_limit_date)s, %(price)s, %(freight_value)s)
         ON CONFLICT (order_id, order_item_id) DO NOTHING
     """,
-    "ecommerce_payments": """
-        INSERT INTO staging_payments
+    "ecommerce_payments": f"""
+        INSERT INTO {STAGING_TABLES['payments']}
             (order_id, payment_sequential, payment_type, payment_installments, payment_value)
         VALUES
             (%(order_id)s, %(payment_sequential)s, %(payment_type)s,
              %(payment_installments)s, %(payment_value)s)
         ON CONFLICT (order_id, payment_sequential) DO NOTHING
     """,
-    "ecommerce_reviews": """
-        INSERT INTO staging_reviews
-            (review_id, order_id, review_score, review_creation_date, review_answer_timestamp)
+    "ecommerce_reviews": f"""
+        INSERT INTO {STAGING_TABLES['reviews']}
+            (review_id, order_id, review_score, review_comment_title,
+             review_comment_message, review_creation_date, review_answer_timestamp)
         VALUES
-            (%(review_id)s, %(order_id)s, %(review_score)s,
-             %(review_creation_date)s, %(review_answer_timestamp)s)
+            (%(review_id)s, %(order_id)s, %(review_score)s, %(review_comment_title)s,
+             %(review_comment_message)s, %(review_creation_date)s, %(review_answer_timestamp)s)
         ON CONFLICT (review_id, order_id) DO NOTHING
     """,
-    "ecommerce_products": """
-        INSERT INTO staging_products
+    "ecommerce_products": f"""
+        INSERT INTO {STAGING_TABLES['products']}
             (product_id, product_category_name, product_name_lenght,
              product_description_lenght, product_photos_qty,
              product_weight_g, product_length_cm, product_height_cm, product_width_cm)
@@ -139,23 +143,23 @@ INSERT_QUERIES = {
              %(product_weight_g)s, %(product_length_cm)s, %(product_height_cm)s, %(product_width_cm)s)
         ON CONFLICT (product_id) DO NOTHING
     """,
-    "ecommerce_sellers": """
-        INSERT INTO staging_sellers
+    "ecommerce_sellers": f"""
+        INSERT INTO {STAGING_TABLES['sellers']}
             (seller_id, seller_zip_code_prefix, seller_city, seller_state)
         VALUES
             (%(seller_id)s, %(seller_zip_code_prefix)s, %(seller_city)s, %(seller_state)s)
         ON CONFLICT (seller_id) DO NOTHING
     """,
-    "ecommerce_geolocation": """
-        INSERT INTO staging_geolocation
+    "ecommerce_geolocation": f"""
+        INSERT INTO {STAGING_TABLES['geolocation']}
             (geolocation_zip_code_prefix, geolocation_lat, geolocation_lng,
              geolocation_city, geolocation_state)
         VALUES
             (%(geolocation_zip_code_prefix)s, %(geolocation_lat)s, %(geolocation_lng)s,
              %(geolocation_city)s, %(geolocation_state)s)
     """,
-    "ecommerce_category_trans": """
-        INSERT INTO staging_category_translation
+    "ecommerce_category_trans": f"""
+        INSERT INTO {STAGING_TABLES['category_translation']}
             (product_category_name, product_category_name_english)
         VALUES
             (%(product_category_name)s, %(product_category_name_english)s)
@@ -171,6 +175,13 @@ def run_consumer():
     print("Membuat / memverifikasi 9 tabel staging di PostgreSQL...")
     for sql in CREATE_TABLES:
         cursor.execute(sql)
+    # Pastikan kolom unstructured review_comment_title & review_comment_message tersedia
+    cursor.execute(
+        f"ALTER TABLE {STAGING_TABLES['reviews']} ADD COLUMN IF NOT EXISTS review_comment_title TEXT;"
+    )
+    cursor.execute(
+        f"ALTER TABLE {STAGING_TABLES['reviews']} ADD COLUMN IF NOT EXISTS review_comment_message TEXT;"
+    )
     conn.commit()
     print("✓ Semua tabel staging siap.\n")
 

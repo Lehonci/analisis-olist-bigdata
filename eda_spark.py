@@ -46,6 +46,28 @@ def build_spark_session():
     return builder.getOrCreate()
 
 
+def fit_best_kmeans(df_scaled, k, candidate_seeds=(1, 7, 21, 42, 99)):
+    """Melatih K-Means pada beberapa kandidat seed dan memilih model dengan WSSSE minimum."""
+    best_model = None
+    best_cost = float("inf")
+    best_seed = candidate_seeds[0]
+    for seed in candidate_seeds:
+        km = KMeans(
+            featuresCol="features",
+            predictionCol="prediction",
+            k=k,
+            seed=seed,
+            maxIter=100,
+        )
+        model = km.fit(df_scaled)
+        cost = float(model.summary.trainingCost)
+        if cost < best_cost:
+            best_cost = cost
+            best_model = model
+            best_seed = seed
+    return best_model, best_cost, best_seed
+
+
 def main():
     # ─────────────────────────────────────────────────────────
     # 1. Inisiasi Apache Spark
@@ -187,7 +209,7 @@ def main():
     """)
     write_jdbc(df_order_status, ANALYTICS_TABLES["order_status"])
 
-    # 2e. Tren Pembelian Bulanan
+    # 2e. Tren Pembelian Bulanan (Dinamis dari seluruh rentang historis dataset)
     df_monthly_trend = spark.sql("""
         WITH order_pay AS (
             SELECT order_id, SUM(payment_value) AS order_payment_value
@@ -205,8 +227,7 @@ def main():
         LEFT JOIN order_pay op ON o.order_id = op.order_id
         WHERE o.order_status = 'delivered'
           AND o.order_purchase_timestamp IS NOT NULL
-          AND SUBSTRING(o.order_purchase_timestamp, 1, 7) >= '2017-01'
-          AND SUBSTRING(o.order_purchase_timestamp, 1, 7) <= '2018-08'
+          AND LENGTH(TRIM(o.order_purchase_timestamp)) >= 7
         GROUP BY SUBSTRING(o.order_purchase_timestamp, 1, 7)
         ORDER BY order_month
     """)
@@ -233,10 +254,10 @@ def main():
     df_top_categories.limit(10).show(truncate=False)
 
     # ─────────────────────────────────────────────────────────
-    # 3. Feature Engineering 7 Fitur Wilayah (Bebas Join Fan-Out)
+    # 3. Feature Engineering 7 Fitur Wilayah & Demografi (Bebas Join Fan-Out)
     # ─────────────────────────────────────────────────────────
     print("\n" + "=" * 75)
-    print("  3. EKSTRAKSI 7 FITUR AGREGAT WILAYAH (NEGARA BAGIAN) & GEOLOCATION")
+    print("  3. EKSTRAKSI FITUR AGREGAT WILAYAH, DEMOGRAFI & GEOLOCATION")
     print("=" * 75)
 
     # CTE mengagregasi payments, order_items, dan reviews per order_id terlebih dahulu
@@ -288,8 +309,8 @@ def main():
             CAST(COALESCE(AVG(oi.item_count), 0.0) AS DOUBLE) AS avg_items_per_order,
             CAST(COALESCE(SUM(oi.total_order_freight) * 100.0 / NULLIF(SUM(oi.total_order_price), 0.0), 0.0) AS DOUBLE) AS freight_to_price_pct,
             CAST(COALESCE(AVG(DATEDIFF(TO_TIMESTAMP(o.order_delivered_customer_date), TO_TIMESTAMP(o.order_purchase_timestamp))), 0.0) AS DOUBLE) AS avg_delivery_days,
-            COALESCE(g.lat, -14.2350) AS lat,
-            COALESCE(g.lng, -51.9253) AS lng
+            g.lat,
+            g.lng
         FROM customers c
         LEFT JOIN orders o
             ON c.customer_id = o.customer_id
@@ -352,10 +373,12 @@ def main():
 
     k_range = list(range(2, 9))
     eval_records = []
+    models_by_k = {}
 
     for k in k_range:
         km = KMeans(featuresCol="features", predictionCol="prediction", k=k, seed=1, maxIter=100)
         model = km.fit(df_scaled)
+        models_by_k[k] = model
         preds = model.transform(df_scaled)
 
         wssse = float(model.summary.trainingCost)
@@ -377,26 +400,19 @@ def main():
     w_min, w_max = eval_records[-1]["wssse_cost"], eval_records[0]["wssse_cost"]
 
     for i, rec in enumerate(eval_records):
-        # Persentase penurunan WSSSE dibanding K sebelumnya
         if i == 0:
             rec["wssse_drop_pct"] = 0.0
         else:
             prev_w = eval_records[i - 1]["wssse_cost"]
             rec["wssse_drop_pct"] = round((prev_w - rec["wssse_cost"]) * 100.0 / prev_w, 2)
 
-        # Jarak tegak lurus terstandarisasi ke garis lurus penghubung (K=2, WSSSE_2) dan (K=8, WSSSE_8)
         x_norm = (rec["k"] - k_min) / (k_max - k_min)
         y_norm = (rec["wssse_cost"] - w_min) / (w_max - w_min) if w_max > w_min else 0.0
-        # Garis sekant dari (0, 1) ke (1, 0) adalah x + y - 1 = 0
         elbow_dist = abs(1.0 - x_norm - y_norm) / math.sqrt(2.0)
         rec["elbow_distance"] = round(elbow_dist, 4)
         rec["wssse_cost"] = round(rec["wssse_cost"], 4)
         rec["silhouette_score"] = round(rec["silhouette_score"], 4)
 
-    # Penentuan K Optimal secara algoritmik (kombinasi titik siku Elbow tertinggi & Silhouette
-    # pada partisi yang menghasilkan minimal 2 segmen pasar non-outlier):
-    # Pada K=2, model hanya memisahkan outlier tunggal (São Paulo, n=1) dari 26 negara bagian lain
-    # (non_singleton_clusters == 1), sehingga belum mengelompokkan wilayah di luar SP.
     valid_candidates = [r for r in eval_records if r["non_singleton_clusters"] >= 2]
     best_record = max(
         valid_candidates,
@@ -428,7 +444,6 @@ def main():
 
     df_eval_spark = spark.createDataFrame(pd.DataFrame(eval_records))
     write_jdbc(df_eval_spark, ANALYTICS_TABLES["kmeans_eval"])
-    write_jdbc(df_eval_spark, "clustering_eval_metrics")
 
     # ─────────────────────────────────────────────────────────
     # 5. Pelatihan Model K-Means Optimal & Penamaan Klaster Dinamis
@@ -437,15 +452,10 @@ def main():
     print(f"  5. PELATIHAN K-MEANS (K = {optimal_k}) & PROFIL SEGMENTASI WILAYAH")
     print("=" * 75)
 
-    kmeans_final = KMeans(
-        featuresCol="features",
-        predictionCol="raw_cluster",
-        k=optimal_k,
-        seed=1,
-        maxIter=100,
+    model_final = models_by_k[optimal_k]
+    df_clustered_raw = model_final.transform(df_scaled).withColumnRenamed(
+        "prediction", "raw_cluster"
     )
-    model_final = kmeans_final.fit(df_scaled)
-    df_clustered_raw = model_final.transform(df_scaled)
     df_clustered_raw.createOrReplaceTempView("raw_clustered_states")
 
     # Urutkan nomor ID klaster (0, 1, 2, ...) secara dinamis berdasarkan rata-rata jumlah pelanggan
@@ -485,11 +495,27 @@ def main():
     df_cluster_mapping.createOrReplaceTempView("cluster_mapping")
 
     df_state_clusters = spark.sql("""
+        WITH state_cities AS (
+            SELECT
+                customer_state AS state_code,
+                CAST(COUNT(DISTINCT customer_city) AS INT) AS total_cities
+            FROM customers
+            GROUP BY customer_state
+        ),
+        state_sellers AS (
+            SELECT
+                seller_state AS state_code,
+                CAST(COUNT(DISTINCT seller_id) AS INT) AS total_sellers
+            FROM sellers
+            GROUP BY seller_state
+        )
         SELECT
             r.customer_state,
             m.cluster,
             m.cluster_name,
             ROUND(r.total_customers, 0) AS total_customers,
+            COALESCE(sc.total_cities, 0) AS total_cities,
+            COALESCE(ss.total_sellers, 0) AS total_sellers,
             ROUND(r.total_orders, 0) AS total_orders,
             ROUND(r.total_revenue, 2) AS total_revenue,
             ROUND(r.avg_order_value, 2) AS avg_order_value,
@@ -503,12 +529,13 @@ def main():
             r.lng
         FROM raw_clustered_states r
         JOIN cluster_mapping m ON r.raw_cluster = m.raw_cluster
+        LEFT JOIN state_cities sc ON r.customer_state = sc.state_code
+        LEFT JOIN state_sellers ss ON r.customer_state = ss.state_code
         ORDER BY m.cluster ASC, r.total_revenue DESC
     """).cache()
 
     df_state_clusters.createOrReplaceTempView("cluster_state_view")
     write_jdbc(df_state_clusters, ANALYTICS_TABLES["state_clusters"])
-    write_jdbc(df_state_clusters, "clustering_state_results")
 
     print("\n--- [RQ2] Hasil Pengelompokan 27 Negara Bagian Brasil ---")
     df_state_clusters.select(
@@ -516,6 +543,8 @@ def main():
         "cluster",
         "cluster_name",
         "total_customers",
+        "total_cities",
+        "total_sellers",
         "total_orders",
         "total_revenue",
         "avg_order_value",
@@ -530,9 +559,12 @@ def main():
             cs.cluster_name,
             FIRST(cm.strategy_recommendation) AS strategy_recommendation,
             CAST(COUNT(cs.customer_state) AS INT) AS total_states,
-             Concat_ws(', ', COLLECT_LIST(cs.customer_state)) AS states_list,
+            CONCAT_WS(', ', COLLECT_LIST(cs.customer_state)) AS states_list,
             ROUND(SUM(cs.total_customers), 0) AS sum_customers,
             ROUND(AVG(cs.total_customers), 1) AS avg_customers_per_state,
+            CAST(SUM(cs.total_cities) AS INT) AS sum_cities,
+            ROUND(AVG(cs.total_cities), 1) AS avg_cities_per_state,
+            CAST(SUM(cs.total_sellers) AS INT) AS sum_sellers,
             ROUND(SUM(cs.total_orders), 0) AS sum_orders,
             ROUND(AVG(cs.total_orders), 1) AS avg_orders_per_state,
             ROUND(SUM(cs.total_revenue), 2) AS sum_revenue,
@@ -556,6 +588,8 @@ def main():
         "cluster_name",
         "total_states",
         "avg_customers_per_state",
+        "avg_cities_per_state",
+        "sum_sellers",
         "avg_orders_per_state",
         "avg_revenue_per_state",
         "avg_order_ticket_size",
@@ -619,8 +653,6 @@ def main():
         ORDER BY sp.cluster, sp.rank
     """)
     write_jdbc(df_cluster_products, ANALYTICS_TABLES["cluster_products"])
-    write_jdbc(df_cluster_products, "clustering_top_products")
-
     df_cluster_products.show(20, truncate=False)
 
     # ─────────────────────────────────────────────────────────
@@ -650,6 +682,8 @@ def main():
             ROUND(SUM(cs.total_orders) * 100.0 / MAX(nt.nat_orders), 2) AS share_orders_pct,
             ROUND(SUM(cs.total_revenue) * 100.0 / MAX(nt.nat_revenue), 2) AS share_revenue_pct,
             ROUND(AVG(cs.total_customers), 1) AS avg_customers_per_state,
+            ROUND(AVG(cs.total_cities), 1) AS avg_cities_per_state,
+            CAST(SUM(cs.total_sellers) AS INT) AS total_sellers,
             ROUND(AVG(cs.avg_order_value), 2) AS avg_order_value,
             ROUND(AVG(cs.avg_items_per_order), 2) AS avg_items_per_order,
             ROUND(AVG(cs.avg_freight_value), 2) AS avg_freight_value,
