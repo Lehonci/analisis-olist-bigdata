@@ -68,8 +68,6 @@ proyek/
 ├── consumer.py                                # Kafka Consumer (9 Topik Kafka -> staging_*)
 ├── eda_spark.py                               # Spark SQL EDA & MLlib K-Means -> analytics_*
 ├── dashboard.py                               # Streamlit Dashboard (Membaca analytics_*)
-├── JURNAL_JTI_UTU.md                          # Naskah lengkap artikel jurnal (Bab 1 - Bab 4)
-├── requirements.txt                           # Daftar dependensi paket Python
 └── README.md                                  # Dokumentasi proyek
 ```
 
